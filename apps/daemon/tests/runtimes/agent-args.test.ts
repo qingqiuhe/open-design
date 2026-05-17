@@ -165,6 +165,75 @@ test('devin args use acp subcommand for json-rpc streaming', () => {
   assert.equal(devin.streamFormat, 'acp-json-rpc');
 });
 
+// Devin's ACP server does not reliably honor `session/set_model` for every
+// model id, and `acp.ts` swallows the resulting `-32603/-32602/-32601/-32002`
+// errors and silently runs the prompt with whatever default lives in
+// `~/.config/devin/config.json` — so the model the user picked in the UI
+// never actually applied. Devin's documented model-selection mechanism is
+// the global `--model <id>` flag (https://cli.devin.ai/docs/reference/commands),
+// which pins the model at process start regardless of any later ACP
+// negotiation. Pin both the presence of the flag and its position before
+// the `acp` subcommand — Devin parses subcommand-after-globals strictly
+// and would reject `acp --model <id>` as an unknown flag on `acp`.
+test('devin args inject --model before the acp subcommand when the user picks one', () => {
+  const args = devin.buildArgs('', [], [], { model: 'opus' });
+
+  assert.deepEqual(args, [
+    '--permission-mode',
+    'dangerous',
+    '--respect-workspace-trust',
+    'false',
+    '--model',
+    'opus',
+    'acp',
+  ]);
+  // --model must precede the acp subcommand; Devin treats anything after
+  // the subcommand as that subcommand's flags.
+  const modelIndex = args.indexOf('--model');
+  const acpIndex = args.indexOf('acp');
+  assert.ok(
+    modelIndex >= 0 && modelIndex < acpIndex,
+    `--model (index ${modelIndex}) must come before 'acp' (index ${acpIndex})`,
+  );
+});
+
+test('devin args omit --model when model is "default" (let ~/.config/devin/config.json win)', () => {
+  const args = devin.buildArgs('', [], [], { model: 'default' });
+
+  assert.equal(args.includes('--model'), false);
+  assert.deepEqual(args, [
+    '--permission-mode',
+    'dangerous',
+    '--respect-workspace-trust',
+    'false',
+    'acp',
+  ]);
+});
+
+// Kiro CLI advertises models through ACP session/new, but when detection
+// fails or session/new doesn't return a configOptions model entry, the
+// daemon falls back to fallbackModels for the dropdown. Without documented
+// ids here the dropdown collapses to just "Default (CLI config)" and the
+// user has nothing to pick — which manifests as "the UI model selection
+// is ignored" because there's no real selection happening. Pin a non-empty
+// fallback list and verify Auto + the active Anthropic family ids are
+// present (https://kiro.dev/docs/cli/models).
+test('kiro fallbackModels offer real picks beyond the synthetic default option', () => {
+  assert.ok(Array.isArray(kiro.fallbackModels));
+  assert.ok(
+    kiro.fallbackModels.length > 1,
+    `kiro.fallbackModels must include real picks beyond the synthetic default; got ${JSON.stringify(kiro.fallbackModels)}`,
+  );
+  const ids = kiro.fallbackModels.map((m) => m.id);
+  assert.equal(ids[0], 'default', 'default option must come first');
+  for (const required of ['auto', 'claude-sonnet-4.5', 'claude-opus-4.6']) {
+    assert.ok(
+      ids.includes(required),
+      `kiro.fallbackModels missing documented id ${required}; got ${JSON.stringify(ids)}`,
+    );
+  }
+});
+
 test('pi args use rpc mode without --no-session and append model/thinking options', () => {
   const baseArgs = pi.buildArgs('', [], [], {}, {});
 
